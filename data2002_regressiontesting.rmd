@@ -1,0 +1,151 @@
+  
+---
+title: "Final"
+author: "Sydney_Robertson"
+date: "11/11/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Libraries
+```{r libs, message=FALSE, error=FALSE}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(gt)
+library(emmeans)
+library(ggfortify)
+library(stargazer)
+library(lmtest)
+library(corrplot)
+library(car)
+```
+
+## Importing Data
+```{r import, echo=FALSE, message=FALSE}
+data = read_tsv("https://dasl.datadescription.com/download/data/3079") %>%
+  janitor::clean_names()
+glimpse(data)
+data = data %>% filter(pct_bf!=0)
+# can include data exploration here instead of glimpse if desired.
+```
+## Transform Data
+```{r}
+## this is used to test out different transformations for the exaustive model searching algorithm bellow
+tdata = data %>% filter(pct_bf!=0) %>% mutate(pct_bf= log(pct_bf)) %>% mutate(height = log(height)) %>% mutate(age = log(age), neck = log(neck), abdomen = log(abdomen), bicep = log(bicep), wrist = log(wrist))
+## , hip= log(hip), thigh = log(thigh), waist= log(waist), forearm = log(forearm)
+```
+
+## Can Skip this:
+```{r Exaustived_model_searching_algorithm}
+varData = subset(tdata, select = -c(density, pct_bf))
+binaryCombinationArray = crossing("1"= 0:1, "2"= 0:1, "3"=0:1, "4"=0:1, "5"=0:1, "6"=0:1, "7"=0:1, "8"=0:1, "9"=0:1, "10"=0:1, "11"=0:1, "12"=0:1, "13"=0:1, "14"=0:1)
+keep = colnames(varData)
+multVector = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14)
+Result <- data.frame(matrix(ncol = 4, nrow = 0))
+# this checks all the combination of varaiables in the dataset tdata that we have prepared.
+for (i in 1:nrow(binaryCombinationArray)){
+  tempMultVector = multVector*as.numeric(binaryCombinationArray[i,])
+  tempKeep = keep[tempMultVector]
+  tempKeep = c("pct_bf", tempKeep)
+  partialData = subset(tdata, select = tempKeep)
+  
+  regression_var = lm(pct_bf ~ ., data = partialData)
+  
+  R_Squared = t(broom::glance(regression_var))[2]
+  tempAIC = AIC(regression_var)
+  tempBG = bgtest(regression_var, fill = NA, order = 2)
+  
+  Result <- rbind(Result, c(paste(tempKeep, collapse = ", "), R_Squared, tempAIC,
+  tempBG$p.value))
+}
+  Result = setNames(Result, c("Variables", "Adj_R-Squared", "AIC", "BGtest"))
+```
+```{r 95percent_sig_bg_test}
+bgdataframe = filter(Result, BGtest<0.05)
+bgdataframe
+```
+
+```{r Final_model}
+#This is the final model we've selected. Its mostly based on the AIS score
+#It also is our attempt at the best fit to pass all the asumptions
+ourModel = lm(log(pct_bf) ~ log(age) + log(neck) + log(abdomen) + (abdomen^2) + (hip) + (thigh) + log(bicep) + log(wrist), data = data)
+```
+
+```{r}
+# This is the overall summary of our regression model, The coefficients and the p values
+summary(ourModel)
+```
+```{r}
+# We have used AIC as a model selection criterion. and this is our AIC metric for the selected model.
+AIC(ourModel)
+```
+```{r}
+# this is for the White's adjusted standard errors because Our model has Heteroskedasticity
+vcov = plm::vcovHC(ourModel, type = "HC0")
+coeftest(ourModel, vcov. = vcov)
+```
+
+```{r}
+# Testing Linearity
+# We plot the residuals vs the fitted values. THis can be used to test the Linearity assumption. Here we can see that it is fairly linear but not entirely. it falls of towards the end.
+# Linearity affects reliability of the coefficients and standard errors. From the following plot we can conclude that the functional from of our model is fairly linear.
+plot(ourModel, 1)
+```
+```{r}
+# Another test for linearity
+# The  likeleyhood ratio test can also be used to test for linearity and here the high significance suggests that our model is fairly linear. (I think this is what it means. not a 100% sure on this)
+lrtest(ourModel)
+```
+
+
+```{r}
+# Testing for the assumption for the normality of the error terms.
+plot(ourModel, 2)
+# this is used to establish if the residuals are normally distributed, from the following QQ plot it can be seen that the residuals follow the straight line with the ends diverging. this suggests a good normal distribution of residuals with fat tails.
+```
+
+```{r}
+# This is a check for homoskedasticity 
+plot(ourModel, 3)
+# The plot should be a horizontal line with points equally spread across it. as you can see this is not the case for us. this affects the reliability of the standard errors of our model. but this can be remidied by using white's standard errors. 
+```
+```{r}
+# This is a test for homoskedasticity 
+gqtest(ourModel)
+# here we have to reject the null hypothesis of our model having constant variance.
+```
+
+
+```{r}
+# Influential values (We don't have to include this in our presentation)
+par(mfrow = c(2, 1))
+plot(ourModel, 4)
+plot(ourModel, 5)
+# Shown here are some of the influential cases. the points 52, 151 and 170 influence the regression disproportionately
+```
+
+```{r}
+# This is a test for multicollinearity 
+# we can look at the variance inflation factor (VIF)
+vif(ourModel)
+# The linearity amoungts the independent variables is quiet low for our model. The high value for Log(abdomen) and abdomen is because the function is comparing them to each other. This is not a problem as while making inferences we can take into account both variable instance of abdomen together and treat it as a single equation.
+```
+```{r}
+# This is a test for Autocorrelation/ Independence or error terms
+bgtest(ourModel)
+# we can reject the null hypothesis that consecutive error terms are corroleted and be fairly confident that there is no autocorrelation
+```
+```{r}
+density_reg = lm(log(pct_bf) ~ density, data = data)
+summary(density_reg)
+AIC(density_reg)
+plot(density_reg)
+bgtest(density_reg)
+lrtest(density_reg)
+gqtest(density_reg)
+```
